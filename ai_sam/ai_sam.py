@@ -26,16 +26,21 @@ class AISAM(nn.Module):
         use_lora: bool = False
     ):
         super().__init__()
+
+        # 如果使用LoRA，则通过LoRA_Sam加载模型
         if use_lora:
             self.sam = LoRA_Sam(sam_model_registry[sam_model](checkpoint=sam_checkpoint))
             self.image_encoder = self.sam.sam.image_encoder
             self.mask_decoder = self.sam.sam.mask_decoder
             self.prompt_encoder = self.sam.sam.prompt_encoder
+        # 如果不使用LoRA，则直接加载模型
         else:
             self.sam = sam_model_registry[sam_model](checkpoint=sam_checkpoint)
             self.image_encoder = self.sam.image_encoder
             self.mask_decoder = self.sam.mask_decoder
             self.prompt_encoder = self.sam.prompt_encoder
+        
+        # 设置hard为是否使用硬提示点，并打印这个信息。
         self.hard = use_hard_points
         print('hard:',use_hard_points)
         
@@ -43,6 +48,7 @@ class AISAM(nn.Module):
         self.num_classes=num_classes
         dim_dict = {'vit_b':768,'vit_l':1024,'vit_h':1280,'vit_t':320,}
         encoder_embed_dim = dim_dict[sam_model]
+
         self.auto_prompt = AutoPrompt(
             num_classes=num_classes,
             transformer_dim=transformer_dim,
@@ -52,7 +58,7 @@ class AISAM(nn.Module):
             use_classification_head=use_classification_head,
         )
 
-        # freeze image encoder
+        # 冻结相关的参数
         if not use_lora:
             for param in self.image_encoder.parameters():
                 param.requires_grad = False
@@ -62,22 +68,26 @@ class AISAM(nn.Module):
         
     
     def forward(self, image, bbox_masks=None, points=None, low_res = False):
-        # automatic forward
+        # 通过编码器处理
         image_embedding, all_layer_image_embeddings = self.image_encoder(image)  # (B, 256, 64, 64), (L, B, 256, 64, 64)
+        # 获得对应的位置编码
         image_pe = self.prompt_encoder.get_dense_pe() # (B, 256, 64, 64)
-        bs, c, h, w = image_embedding.shape
+        bs, c, h, w = image_embedding.shape # 作者这里使用的不是3D的模型，而是2D的图像
 
+        # 初始化一个空的列表，用于存储原始分辨率的掩码
         ori_res_masks_list = []
         points_type = torch.cat([
             self.prompt_encoder.not_a_point_embed.weight,
             self.prompt_encoder.point_embeddings[0].weight,
             self.prompt_encoder.point_embeddings[1].weight,
-            ]).detach()
+            ]).detach() # detach是分离的意思
         
+        # 如果提供了关键点信息，处理每个类别的关键点并生成标签。
         if points is not None: # [B, n_class, n_points, 2]
             num_provided_points = points.shape[2]
             point_list = []
             point_label_list = []
+            # 遍历每个类别
             for i in range(self.num_classes):
                 # always use the points to prompt SAM but filter out the mask later.
                 assert bs == 1, f'current only support bs==1 not {bs}'
@@ -87,8 +97,10 @@ class AISAM(nn.Module):
                 point_label[:,:num_provided_points] = 1
                 point = point[:,non_empty_mask,:]
                 point_label = point_label[:,non_empty_mask]
+                # 把点和对应的标签添加到列表中
                 point_list.append(point)
                 point_label_list.append(point_label)
+
         auto_prompt_list, class_features, final_attn_weight_list, feature_list, feature_with_pe_list = self.auto_prompt(
             image=image_embedding.detach(), 
             image_pe=image_pe.detach(), 
@@ -346,8 +358,6 @@ class AutoPrompt(nn.Module):
                     point_embedding=classifier_class_tokens,)
             class_features = self.classifier_head(class_features)
 
-
-
         pos_type = points_type[[True,False,True],:]
         neg_type = points_type[[True,True,False],:]
         class_ids=torch.zeros((bs),dtype=torch.int,device=image.device)
@@ -363,6 +373,7 @@ class AutoPrompt(nn.Module):
         feature_list = []
         class_features_list = []
         feature_with_pe_list = []
+
         for i in range(self.num_classes):
             # get the class emb correspond to each class
             class_emb = torch.index_select(self.class_emb, dim=0, index=class_ids+i) # B x N_class_tokens x C

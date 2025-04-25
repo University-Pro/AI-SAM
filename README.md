@@ -70,3 +70,5 @@ If you find this work useful, please cite:
 
 ## Acknowledgements
 The code is modified from [MedSAM](https://github.com/bowang-lab/MedSAM/tree/main), [SAM-Adapter](https://github.com/tianrun-chen/SAM-Adapter-PyTorch) and [SAM](https://github.com/facebookresearch/segment-anything). We also used the LoRA implementation from [SAMed](https://github.com/hitachinsk/SAMed/tree/main).
+
+文章的网络代码在ai_sam.ai_sam.py文件中，添加了详细的中文注释来辅助理解这个论文
